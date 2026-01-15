@@ -108,7 +108,53 @@ class JWTTokenController extends ControllerBase {
 	  return $token;
 	}
 
-  public function serveMedia(MediaInterface $media) { 
+	/**
+	 * Can Handle big file size
+	**/
+	public function serveMedia(MediaInterface $media) {
+	  $jwt_token = $this->getJWTToken(); // keep your auth logic
+	
+	  if (!$media->hasField('field_media_document') || $media->get('field_media_document')->isEmpty()) {
+		throw new NotFoundHttpException();
+	  }
+	
+	  /** @var \Drupal\file\FileInterface $file */
+	  $file = $media->get('field_media_document')->entity;
+	  if (!$file) {
+		throw new NotFoundHttpException();
+	  }
+	
+	  // Optional: do your own access check with JWT here
+	  // e.g. if (!$this->jwtAllowsAccess($jwt_token, $file)) { throw new AccessDeniedHttpException(); }
+	
+	  $uri = $file->getFileUri();           // 'private://something.pdf'
+	  $filename = $file->getFilename();
+	  $mime = $file->getMimeType() ?: 'application/octet-stream';
+	
+	  // Important headers
+	  header('Content-Type: ' . $mime);
+	  header('Content-Disposition: attachment; filename="' . addcslashes($filename, '"\\') . '"');
+	  header('Content-Length: ' . $file->getSize());
+	  header('Cache-Control: private, no-transform, no-store, must-revalidate');
+	  header('Expires: 0');
+	
+	  // Stream without loading whole file
+	  if ($stream = fopen($uri, 'rb')) {
+		fpassthru($stream);
+		fclose($stream);
+	  } else {
+		// Fallback or error
+		header('HTTP/1.1 500 Internal Server Error');
+		echo 'Cannot open file stream.';
+	  }
+	
+	  exit;
+	}
+	
+  /**
+   *  Only work for small file
+   **/
+  public function serveMediaNotScaled(MediaInterface $media) { 
     $jwt_token = $this->getJWTToken();
 
     if ($media->hasField('field_media_document') && !$media->get('field_media_document')->isEmpty()) {
