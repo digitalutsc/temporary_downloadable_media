@@ -5,10 +5,8 @@
  * Adds support for serializing entities to JSON-LD / Islandora Project.
  */
 
+use Drupal\Core\Form\FormStateInterface;
 use Drupal\Core\Routing\RouteMatchInterface;
-use Drupal\user\Entity\User;
-use Drupal\Core\Entity\EntityStorageInterface;
-use Drupal\Core\Entity\EntityTypeManagerInterface;
 
 /**
  * Implements hook_help().
@@ -22,12 +20,12 @@ function temporary_downloadable_media_help($route_name, RouteMatchInterface $rou
 }
 
 /**
- * Implement hook_form_alter
+ * Implement hook_form_alter.
  */
-function temporary_downloadable_media_form_alter(&$form, \Drupal\Core\Form\FormStateInterface $form_state, $form_id) : void {
+function temporary_downloadable_media_form_alter(&$form, FormStateInterface $form_state, $form_id) : void {
   if ($form_id === "webform_submission_request_access_node_33_add_form") {
     \Drupal::logger('my_module')->error($form_id);
-    //print(json_encode($form));
+    // print(json_encode($form));
     print_log($form["select_media_to_request"]);
   }
 }
@@ -47,13 +45,14 @@ if (!function_exists('print_log')) {
  * Helper function to retrieve a list of active user names, keyed by user ID.
  *
  * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
- * The entity type manager service.
+ *   The entity type manager service.
+ *
  * @return array
- * An associative array of users (uid => username) suitable for a #options array.
+ *   An associative array of users (uid => username) suitable for a #options array.
  */
 function get_user_select_options(): array {
   // 1. Get the user storage.
-  /** @var EntityStorageInterface $user_storage */
+  /** @var \Drupal\Core\Entity\EntityStorageInterface $user_storage */
   $user_storage = \Drupal::entityTypeManager()->getStorage('user');
 
   // 2. Build the Entity Query.
@@ -70,9 +69,9 @@ function get_user_select_options(): array {
 
   // 3. Load the user entities (only the ones matching the query).
   $users = $user_storage->loadMultiple($query);
-  
+
   $options = [];
-  
+
   // 4. Populate the options array.
   // The key must be the User ID (uid) and the value is the display name.
   foreach ($users as $uid => $user) {
@@ -82,4 +81,3 @@ function get_user_select_options(): array {
 
   return $options;
 }
- 

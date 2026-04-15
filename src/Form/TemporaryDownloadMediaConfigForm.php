@@ -27,10 +27,10 @@ class TemporaryDownloadMediaConfigForm extends ConfigFormBase {
     $form['temporary_downloadable_media_fieldset'] = [
       '#type' => 'fieldset',
     ];
-   
+
     // Call the helper function to get the options list.
     $user_options = get_user_select_options();
-    
+
     // Add a placeholder/empty option at the beginning.
     $user_options = ['' => $this->t('- Select a User -')] + $user_options;
 
