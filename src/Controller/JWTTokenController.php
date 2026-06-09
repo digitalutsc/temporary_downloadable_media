@@ -224,7 +224,7 @@ class JWTTokenController extends ControllerBase {
             // Iterate through the media references
             foreach ($media_references as $media) {
                 if ($media instanceof Media) {
-                    drupal_log($media->id());
+                    //drupal_log($media->id());
                     $media_name = $media->getName();
                     // Check if the media entity has the field_media_use field
                     if ($media->hasField('field_media_use') && !$media->get('field_media_use')->isEmpty()) {
