@@ -1,10 +1,3 @@
-temporary_downloadable_media.jwt_token_controller:
-  path: '/request-access/jwt-token'
-  defaults:
-    _controller: '\Drupal\temporary_downloadable_media\Controller\JWTTokenController::getJWTTokenReponse'
-    _title: 'Generate JWT Token'
-  requirements:
-    _access: 'TRUE'
 temporary_downloadable_media.configform:
   path: '/admin/config/media/temporary_downloadable'
   defaults:
@@ -19,3 +12,5 @@ temporary_downloadable_media.access_grant_controller:
     _title: 'Serve the access media'
   requirements:
     _access: 'TRUE'
+  options:
+    no_cache: TRUE

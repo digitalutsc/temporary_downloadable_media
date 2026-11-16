@@ -5,3 +5,9 @@ temporary_downloadable_media.settings:
     user_select:
       type: string
       label: 'select user to generate a valid token'
+    token_expired_duration:
+      type: string
+      label: 'Hours a request-access link stays valid'
+    webform_id:
+      type: string
+      label: 'Webform whose submissions grant access (default: request_access)'

@@ -15,55 +15,13 @@ use Symfony\Component\HttpFoundation\Request;
 use Drupal\user\Entity\User;
 use Drupal\jwt\JsonWebToken\JsonWebToken;
 use Drupal\jwt\Transcoder\JwtTranscoderInterface;
+use Drupal\node\NodeInterface;
+use Symfony\Component\HttpFoundation\BinaryFileResponse;
+use Symfony\Component\HttpFoundation\ResponseHeaderBag;
+use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
+use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 
 class JWTTokenController extends ControllerBase {
-
-  /**
-   * Generates a JWT token for a specific service account user ID without
-   * programmatically logging in or out.
-   */
-  public function getJWTTokenReponse(): JsonResponse {
-    $config = \Drupal::config('temporary_downloadable_media.settings');
-
-    // 1. Define the service account User ID.
-    $service_account_uid = $config->get("user_select"); // Replace with your actual service account user ID
-
-    // 2. Load the user entity directly.
-    $account = User::load($service_account_uid);
-
-    if (!$account) {
-      // Handle the case where the user doesn't exist.
-      return new JsonResponse(['error' => 'Service account not found.'], 404);
-    }
-
-    // 3. Get the necessary services.
-    /** @var \Drupal\jwt\Transcoder\JwtTranscoderInterface $transcoder */
-    $transcoder = \Drupal::service('jwt.transcoder');
-
-    // 4. Create the claims array.
-    $expired_hours = $config->get("token_expired_duration");
-    $now = time();
-    $claims = [
-      // Standard claims: Issued At (iat) and Expiration (exp).
-      'iat' => $now,
-      'exp' => $now + 120, // Token valid for 120 seconds (2 minutes).
-
-      // Drupal-specific claim: User UUID. This is essential for authentication.
-      'drupal.uuid' => $account->uuid(),
-    ];
-
-    // 5. Encode the claims into a token object and IMMEDIATELY cast it to a string.
-    $token_object = $transcoder->encode($claims);
-
-    // Cast the token object to a string. This avoids the need for the specific 'use' statement.
-    $token_string = (string) $token_object; 
-
-    // 6. Return the token in a JSON response.
-    $data = [
-      'jwt-token' => $token_string,
-    ];
-    return new JsonResponse($data);
-  }
 
 	/** 
    * Generates a JWT token for the service account user (UID 1) without * initiating an active login session. 
@@ -108,49 +66,28 @@ class JWTTokenController extends ControllerBase {
 	  return $token;
 	}
 
-	/**
-	 * Can Handle big file size
-	**/
-	public function serveMedia(MediaInterface $media) {
-	  $jwt_token = $this->getJWTToken(); // keep your auth logic
-	
-	  if (!$media->hasField('field_media_document') || $media->get('field_media_document')->isEmpty()) {
-		throw new NotFoundHttpException();
-	  }
-	
-	  /** @var \Drupal\file\FileInterface $file */
-	  $file = $media->get('field_media_document')->entity;
-	  if (!$file) {
-		throw new NotFoundHttpException();
-	  }
-	
-	  // Optional: do your own access check with JWT here
-	  // e.g. if (!$this->jwtAllowsAccess($jwt_token, $file)) { throw new AccessDeniedHttpException(); }
-	
-	  $uri = $file->getFileUri();           // 'private://something.pdf'
-	  $filename = $file->getFilename();
-	  $mime = $file->getMimeType() ?: 'application/octet-stream';
-	
-	  // Important headers
-	  header('Content-Type: ' . $mime);
-	  header('Content-Disposition: attachment; filename="' . addcslashes($filename, '"\\') . '"');
-	  header('Content-Length: ' . $file->getSize());
-	  header('Cache-Control: private, no-transform, no-store, must-revalidate');
-	  header('Expires: 0');
-	
-	  // Stream without loading whole file
-	  if ($stream = fopen($uri, 'rb')) {
-		fpassthru($stream);
-		fclose($stream);
-	  } else {
-		// Fallback or error
-		header('HTTP/1.1 500 Internal Server Error');
-		echo 'Cannot open file stream.';
-	  }
-	
-	  exit;
-	}
-	
+  /**
+   * Streams the media's document file as a download.
+   *
+   * The caller (accessGrant) has already decided that access is allowed.
+   */
+  public function serveMedia(MediaInterface $media): BinaryFileResponse {
+    if (!$media->hasField('field_media_document') || $media->get('field_media_document')->isEmpty()) {
+      throw new NotFoundHttpException();
+    }
+    /** @var \Drupal\file\FileInterface|null $file */
+    $file = $media->get('field_media_document')->entity;
+    if (!$file || !is_file($file->getFileUri())) {
+      throw new NotFoundHttpException();
+    }
+    $response = new BinaryFileResponse($file->getFileUri(), 200, [
+      'Content-Type' => $file->getMimeType() ?: 'application/octet-stream',
+      'Cache-Control' => 'private, no-store, must-revalidate',
+    ], FALSE);
+    $response->setContentDisposition(ResponseHeaderBag::DISPOSITION_ATTACHMENT, $file->getFilename());
+    return $response;
+  }
+
   /**
    *  Only work for small file
    **/
@@ -253,42 +190,55 @@ class JWTTokenController extends ControllerBase {
   }
 
   /**
-   * Check access control and grand temporary access
+   * Serves the requested item's temporary-download file for a valid link.
+   *
+   * The link is /request-access/{submission_token}/{nodeinfo}/{submitted}.
+   * Only the token is trusted. The item and the start of the validity window
+   * are read from the stored webform submission, never from the URL:
+   * {nodeinfo} must match the submission's source node and {submitted} is
+   * ignored (it is kept only so links already mailed out keep their shape).
    */
-  public function accessGrant(String $submission_token, String $nodeinfo, $submitted) {
-    $config = \Drupal::config('temporary_downloadable_media.settings');
-    $expired_hours = $config->get("token_expired_duration");
+  public function accessGrant(string $submission_token, string $nodeinfo, $submitted) {
+    $config = $this->config('temporary_downloadable_media.settings');
+    $valid_hours = (int) ($config->get('token_expired_duration') ?: 24);
+    $webform_id = $config->get('webform_id') ?: 'request_access';
 
-    $parts = explode(", ", $nodeinfo);
-    $nid = $parts[count($parts) - 1];
-    
-    // Load the webform submission by token
-    $submission = \Drupal::entityTypeManager()
-        ->getStorage('webform_submission')
-        ->loadByProperties(['token' => $submission_token]);
-
-    // Since loadByProperties returns an array, get the first element
-    $submission = reset($submission);
-
-    // validate the link is still within 1 day 
-    $end_time = $submitted + ($expired_hours * 60 * 60);
-
-    $current_time = time();
-    if ($submission && ($current_time >= $submitted && $current_time <= $end_time)) {
-      $media = $this->getMedias($nid);
-      if ($media) {
-        $this->serveMedia($media);
-      }
-      else {
-        header('HTTP/1.1 404 Not found');
-	      header("Location: https://ark.digital.utsc.utoronto.ca/404.php");
-        exit;
-      }
-    }   
-    else {
-      header('HTTP/1.1 403 Forbidden');
-      header("Location: https://ark.digital.utsc.utoronto.ca/403.php");
-      exit;
+    // 1. The token must belong to a submission of the request-access form.
+    $submissions = $this->entityTypeManager()
+      ->getStorage('webform_submission')
+      ->loadByProperties(['token' => $submission_token, 'webform_id' => $webform_id]);
+    /** @var \Drupal\webform\WebformSubmissionInterface|false $submission */
+    $submission = reset($submissions);
+    if (!$submission || $submission->isDraft()) {
+      throw new AccessDeniedHttpException();
     }
+
+    // 2. The validity window starts when the form was submitted (server side).
+    $created = (int) $submission->getCreatedTime();
+    $now = \Drupal::time()->getRequestTime();
+    if ($now < $created || $now > $created + $valid_hours * 3600) {
+      throw new AccessDeniedHttpException('This link has expired.');
+    }
+
+    // 3. The link is only good for the item the form was submitted on.
+    $node = $submission->getSourceEntity();
+    $parts = explode(', ', $nodeinfo);
+    $requested_nid = end($parts);
+    if (!$node instanceof NodeInterface || (string) $node->id() !== (string) $requested_nid) {
+      throw new AccessDeniedHttpException();
+    }
+
+    // 4. The item itself must be visible to the visitor (published, not in a
+    // group that hides it). Only the file is unlocked by the link.
+    if (!$node->access('view')) {
+      throw new AccessDeniedHttpException();
+    }
+
+    $media = $this->getMedias($node->id());
+    if (!$media) {
+      throw new NotFoundHttpException();
+    }
+    return $this->serveMedia($media);
   }
+
 }
